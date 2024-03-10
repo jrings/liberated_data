@@ -8,7 +8,7 @@ from utils import log, tonum
 
 COLUMNS = ["Emission Source", "Air Contaminant Name", "Emission Rate lbs/hr", "Emission Rate tons/year"]
 
-def extract_from_text(text):
+def extract_from_text(text: str):
     """Table formatted without vertical lines - extract from text.
     """
     lines = text.split("\n")
@@ -42,9 +42,22 @@ def clean_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     df["Emission Source"].replace('', pd.NA, inplace=True)
     df["Emission Source"].fillna(method="ffill", inplace=True)
     df["Air Contaminant Name"] = df["Air Contaminant Name"].str.replace("\n", "_")
-    df = df[~df["Emission Rate tons/year"].str.contains('[a-zA-Z]', na=False)]
+    if not df["Emission Rate tons/year"].dtype == "float64":
+        df = df[~df["Emission Rate tons/year"].str.contains('[a-zA-Z]', na=False)]
     df = df[~df["Emission Source"].isin([": None"])]
     return df
+
+
+def fix_and_merge_rows(rows: list) -> list: 
+    """Merging and fixing rows to the one dataframe format,
+    TODO: lots of edge cases being hit with a big hammer here, refine more
+    """
+    rows = [[f"{row[0]}: {row[1]}"]  + row[2:] 
+        if row[0] is not None 
+        else [""] + row[2:] for row in rows]
+    rows = [row + [""] if len(row) == 3 else row for row in rows]
+    return rows
+
 
 def extract_from_file(fname: str, out_fname: str = "") -> pd.DataFrame:
     log.info(f"Extracting from {fname}")
@@ -52,10 +65,13 @@ def extract_from_file(fname: str, out_fname: str = "") -> pd.DataFrame:
     table_segments = []
     for p in pdf.pages:
         try:
-            table_segments.append(p.extract_table())
+            tab = p.extract_table()
+            if tab is not None:
+                if not len(table_segments) or len(tab[0]) == len(table_segments[0][0]):  # Sometimes there is an extra table
+                    table_segments.append(tab)
         except TypeError:
             pass
-    table_segments = [t for t in table_segments if t is not None]
+
     if not len(table_segments):
         log.info("Encountered table without vertical lines, extracting from text")
         text = "\n".join([p.extract_text() for p in pdf.pages])
@@ -66,7 +82,8 @@ def extract_from_file(fname: str, out_fname: str = "") -> pd.DataFrame:
         ]
         rows = list(itertools.chain(*table_segments))
         log.debug("Encountered table with vertical lines")
-        rows = [[f"{row[0]}: {row[1]}"]  + row[2:] if row[0] is not None else [""] + row[2:] for row in rows]
+        rows = fix_and_merge_rows(rows)
+        
         df = pd.DataFrame(rows, columns=COLUMNS)
     df = clean_dataframe(df)
     log.debug(f"Extracted table has shape {df.shape}")
